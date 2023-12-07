@@ -82,12 +82,13 @@ app.put("/change-password", async (req, res) => {
   const isValid = await bcrypt.compare(oldPassword, result1.password);
 
   if (isValid) {
-    const updateQuery = `update user set password=${hashedNewPass}`;
+    const updateQuery = `update user set password="${hashedNewPass}" where username="${username}"`;
 
     if (newPassword.length < 5) {
       res.status(400);
       res.send("Password is too short");
     } else {
+      await db.run(updateQuery);
       res.status(200);
       res.send("Password updated");
     }
