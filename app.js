@@ -1,108 +1,100 @@
-const express = require("express");
-const path = require("path");
 const { open } = require("sqlite");
+const express = require("express");
 const sqlite3 = require("sqlite3");
+const path = require("path");
+const bcrypt = require("bcrypt");
 
 const app = express();
-app.use(express.json());
 
-let db = null;
-const connectToDB = async () => {
-  const pathName = path.join(__dirname, "moviesData.db");
+app.use(express.json());
+var db = null;
+
+const connectToDb = async () => {
+  const fPath = path.join(__dirname, "userData.db");
   try {
     db = await open({
-      filename: pathName,
+      filename: fPath,
       driver: sqlite3.Database,
     });
-    app.listen(3000, () => {
-      console.log("Server at: http://localhost:3000");
+
+    app.listen(3001, () => {
+      console.log("listening at http://localhost:3000/");
     });
   } catch (e) {
-    console.log(e.message);
-    process.exit();
+    console.log("Error:", e.message);
   }
 };
 
-connectToDB();
+connectToDb();
 
-const changeCase = (ele) => ({
-  movieName: ele.movie_name,
+app.post("/register", async (req, res) => {
+  const { username, name, password, gender, location } = req.body;
+
+  const hashedPass = await bcrypt.hash(password, 10);
+
+  const getUsername = `select * from user where username like "${username}"`;
+  const result1 = await db.get(getUsername);
+
+  if (result1 === undefined) {
+    const setUser = `insert into user values("${username}","${name}","${hashedPass}","${gender}","${location}") `;
+
+    if (password.length < 5) {
+      res.status(400);
+      res.send("Password is too short");
+    } else {
+      await db.run(setUser);
+      res.status(200);
+      res.send("User created successfully");
+    }
+  } else {
+    res.status(400);
+    res.send("User already exists");
+  }
 });
 
-app.get("/movies/", async (request, response) => {
-  const getMovies = `select movie_name from movie  `;
-  const result = await db.all(getMovies);
-  const obj = result.map((ele) => ({ movieName: ele.movie_name }));
-  console.log(obj);
-  response.send(obj);
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  const getUsername = `select * from user where username like "${username}"`;
+  const result1 = await db.get(getUsername);
+
+  if (result1 === undefined) {
+    res.status(400);
+    res.send("Invalid user");
+  } else {
+    const isValidPassword = await bcrypt.compare(password, result1.password);
+    if (isValidPassword) {
+      res.status(200);
+      res.send("Login success!");
+    } else {
+      res.status(400);
+      res.send("Invalid password");
+    }
+  }
 });
 
-app.post("/movies/", async (req, res) => {
-  const movie = req.body;
-  const { directorId, movieName, leadActor } = movie;
-  const q1 = `insert into movie(director_id,movie_name,lead_actor)
-  values (${directorId},"${movieName}","${leadActor}"  ) `;
-  const result1 = await db.run(q1);
-  console.log(result1.lastID);
-  res.send("Movie Successfully Added");
-});
+app.put("/change-password", async (req, res) => {
+  const { username, oldPassword, newPassword } = req.body;
 
-const changeCaseObject = (ele) => ({
-  movieId: ele.movie_id,
-  directorId: ele.director_id,
-  movieName: ele.movie_name,
-  leadActor: ele.lead_actor,
-});
+  const hashedNewPass = await bcrypt.hash(newPassword, 10);
+  const getUsername = `select * from user where username like "${username}"`;
+  const result1 = await db.get(getUsername);
 
-app.get("/movies/:movieId/", async (req, res) => {
-  const { movieId } = req.params;
-  console.log(movieId);
-  const getMovie = `select * from movie where movie_id=${movieId}`;
-  const result = await db.get(getMovie);
+  const isValid = await bcrypt.compare(oldPassword, result1.password);
 
-  res.send(changeCaseObject(result));
-});
+  if (isValid) {
+    const updateQuery = `update user set password=${hashedNewPass}`;
 
-app.put("/movies/:movieId/", async (req, res) => {
-  const { movieId } = req.params;
-  const movie = req.body;
-  const { directorId, movieName, leadActor } = movie;
-  const updateQuery = `update movie 
-                            set director_id=${directorId},
-                            movie_name="${movieName}",
-                            lead_actor="${leadActor}"
-                        where movie_id=${movieId} `;
-  const result = await db.run(updateQuery);
-  res.send("Movie Details Updated");
-});
-
-app.delete("/movies/:movieId/", async (req, res) => {
-  const { movieId } = req.params;
-  const deleteQuery = `delete from movie where movie_id=${movieId}`;
-  const result = await db.run(deleteQuery);
-  res.send("Movie Removed");
-});
-
-const changeCaseDirector = (ele) => ({
-  directorId: ele.director_id,
-  directorName: ele.director_name,
-});
-
-app.get("/directors/", async (req, res) => {
-  const getMovies = `select * from director`;
-  const result = await db.all(getMovies);
-  res.send(result.map((ele) => changeCaseDirector(ele)));
-});
-
-app.get("/directors/:directorId/movies/", async (req, res) => {
-  console.log("DM");
-  const { directorId } = req.params;
-  //   console.log(directorId);
-  const directorMovie = `select movie_name from movie where 
-            director_id=${directorId} `;
-  const result = await db.all(directorMovie);
-  const obj = result.map((ele) => ({ movieName: ele.movie_name }));
-  res.send(obj);
+    if (newPassword.length < 5) {
+      res.status(400);
+      res.send("Password is too short");
+    } else {
+      res.status(200);
+      res.send("Password updated");
+    }
+  } else {
+    res.status(400);
+    res.send("Invalid current password");
+  }
 });
 
 module.exports = app;
