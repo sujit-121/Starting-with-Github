@@ -1,0 +1,193 @@
+const express = require("express");
+const path = require("path");
+const { open } = require("sqlite");
+const sqlite3 = require("sqlite3");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const format = require("date-fns/format");
+
+const app = express();
+app.use(express.json());
+
+let db = null;
+
+const connectToDb = async (req, res) => {
+  const fPath = path.join(__dirname, "twitterClone.db");
+  try {
+    db = await open({
+      filename: fPath,
+      driver: sqlite3.Database,
+    });
+    app.listen(3002, () => {
+      console.log("Server running at http://localhost:3002/");
+    });
+  } catch (e) {
+    console.log("Error:", e.message);
+  }
+};
+
+connectToDb();
+
+app.post("/register", async (req, res) => {
+  const { username, password, gender, name } = req.body;
+  const getUser = `select * from user where username like "${username}"`;
+  const result = await db.get(getUser);
+  if (result === undefined) {
+    if (password.length < 6) {
+      res.status(400);
+      res.send("Password is too short");
+    } else {
+      const hashedPass = await bcrypt.hash(password, 10);
+      const insertQuery = `insert into user(name,username,password,gender)
+                values ("${name}","${username}","${hashedPass}","${gender}") `;
+      const result = await db.run(insertQuery);
+      res.status(200);
+      res.send("User created successfully");
+    }
+  } else {
+    res.status(400);
+    res.send("User already exists");
+  }
+});
+
+app.post("/login/", async (req, res) => {
+  const { username, password } = req.body;
+  const getUser = `select * from user where username like "${username}"`;
+  const result = await db.get(getUser);
+  if (result === undefined) {
+    res.status(400);
+    res.send("Invalid user");
+  } else {
+    isValid = await bcrypt.compare(password, result.password);
+    // console.log(isValid);
+    if (isValid) {
+      const jwtToken = jwt.sign({ username: username }, "secrete_key");
+      res.status(200);
+      res.send({ jwtToken });
+    } else {
+      res.status(400);
+      res.send("Invalid password");
+    }
+  }
+});
+
+const authenticate = async (req, res, next) => {
+  let jwtToken = req.headers["authorization"];
+  if (jwtToken === undefined) {
+    res.status(401);
+    res.send("Invalid JWT Token");
+  } else {
+    jwtToken = jwtToken.split(" ")[1];
+    const result = jwt.verify(jwtToken, "secrete_key", (error, payload) => {
+      if (error) {
+        res.status(401);
+        res.send("Invalid JWT Token");
+      } else {
+        req.username = payload.username;
+        next();
+      }
+    });
+  }
+};
+
+app.get("/user/tweets/feed/", authenticate, async (req, res) => {
+  const { username } = req;
+  const getTweets = `select username,tweet,date_time dateTime from follower inner join user
+        on follower.following_user_id=user.user_id inner join tweet on follower.follower_user_id=tweet.user_id join where user.username="${username}" order by tweet.date_time desc limit 4`;
+  const result = await db.all(getTweets);
+  res.status(200);
+  res.send(result);
+});
+
+app.get("/user/following/", authenticate, async (req, res) => {
+  const { username } = req;
+  const getFollower = `select name from follower f inner join  user u on f.following_user_id=u.user_id where f.follower_user_id = (select user_id from user k where username like "${username}") `;
+  const result = await db.all(getFollower);
+  res.send(result);
+});
+
+app.get("/user/followers/", authenticate, async (req, res) => {
+  const { username } = req;
+  const getFollower = `select name from follower f inner join  user u on f.follower_user_id=u.user_id where f.following_user_id = (select user_id from user k where username like "${username}") `;
+  const result = await db.all(getFollower);
+  res.send(result);
+});
+
+const validatedTweetId = async (req, res, next) => {
+  const { username } = req;
+  const { tweetId } = req.params;
+  console.log(username);
+  const q1 = `select following_user_id from follower where follower_user_id = (select user_id from user where username like "${username}") `;
+  result = await db.all(q1);
+  const arr = result.map((ele) => ele.following_user_id);
+  console.log(result);
+  if (arr.includes(parseInt(tweetId))) {
+    // console.log(true);
+    next();
+  } else {
+    res.status(401);
+    res.send("Invalid Request");
+  }
+};
+
+app.get(
+  "/tweets/:tweetId/",
+  authenticate,
+  validatedTweetId,
+  async (req, res) => {
+    const { tweetId } = req.params;
+    const getDetails = `select tweet,count(distinct l.like_id) likes,count(distinct r.reply_id) replies,t.date_time dateTime from tweet t inner join reply r on t.tweet_id=r.tweet_id inner join like l on l.tweet_id=t.tweet_id  where t.tweet_id=${tweetId}`;
+    const result = await db.get(getDetails);
+    console.log(result);
+    res.send(result);
+  }
+);
+
+app.get(
+  "/tweets/:tweetId/likes/",
+  authenticate,
+  validatedTweetId,
+  async (req, res) => {
+    const { tweetId } = req.params;
+    const getLikes = `select u.name name from user u inner join like l on l.user_id=u.user_id where l.tweet_id=${tweetId} `;
+    const result = await db.all(getLikes);
+    const lt = result.map((ele) => ele.name);
+    res.send({ likes: lt });
+  }
+);
+
+app.get(
+  "/tweets/:tweetId/replies/",
+  authenticate,
+  validatedTweetId,
+  async (req, res) => {
+    const { tweetId } = req.params;
+    const getLikes = `select u.name name,reply from user u inner join reply r on r.user_id=u.user_id where r.tweet_id=${tweetId} `;
+    const result = await db.all(getLikes);
+    console.log(result);
+    // const lt = result.map((ele) => ({name:ele.name,}));
+    res.send({ replies: result });
+  }
+);
+
+app.get("/user/tweets/", authenticate, async (req, res) => {
+  const { username } = req;
+  const getTweets = `select t.tweet tweet,(r.tweet_id) replies,count(l.tweet_id) likes,t.date_time dateTime from tweet t  inner join like l  on t.tweet_id=l.tweet_id inner join reply r on r.tweet_id=t.tweet_id where t.user_id = (select user_id from user where username like "${username}") group by t.tweet_id `;
+  const result = await db.all(getTweets);
+  console.log(result);
+  res.send(result);
+});
+
+// app.post("/user/tweets", authenticate, async (req, res) => {
+//   const { username } = req;
+//   const { tweet } = req.body;
+//   const getId = `select user_id from user where username like "${username}"`;
+//   const id = await db.get(getId);
+//   const formattedDate = format(Date.now(), "yyyy-mm-dd hh:mm:ss");
+//   const insertTweet = `insert into  tweet (tweet,user_id,date_time) values('${tweet}',${id.user_id},"${formattedDate}") `;
+//   const result = await db.run(insertTweet);
+
+//   res.send("Created a Tweet");
+// });
+
+module.exports = app;
